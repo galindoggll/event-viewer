@@ -1,0 +1,3 @@
+export const CREATE_EVENT = 'CREATE_EVENT';
+export const SEARCH_EVENT = 'SEARCH_EVENT';
+export const SET_SEARCH_CRITERIA = 'SET_SEARCH_CRITERIA';

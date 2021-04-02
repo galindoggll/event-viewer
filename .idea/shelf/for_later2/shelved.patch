@@ -1,0 +1,1237 @@
+Index: src/backend/database/migrations/2021_03_31_032320_create_event_days_table.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/database/migrations/2021_03_31_032320_create_event_days_table.php	(revision )
++++ src/backend/database/migrations/2021_03_31_032320_create_event_days_table.php	(revision )
+@@ -0,0 +1,37 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++class CreateEventDaysTable extends Migration
++{
++    /**
++     * Run the migrations.
++     *
++     * @return void
++     */
++    public function up()
++    {
++        Schema::create('event_days', function (Blueprint $table) {
++            $table->bigIncrements('id');
++            $table->unsignedBigInteger('event_id');
++            $table->date('date');
++            $table->timestamps();
++
++            $table->foreign('event_id')
++                ->references('id')
++                ->on('events');
++        });
++    }
++
++    /**
++     * Reverse the migrations.
++     *
++     * @return void
++     */
++    public function down()
++    {
++        Schema::dropIfExists('event_days');
++    }
++}
+Index: src/frontend/src/views/events/index.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/views/events/index.js	(revision )
++++ src/frontend/src/views/events/index.js	(revision )
+@@ -0,0 +1,1 @@
++export { default } from './Event';
+Index: src/backend/app/Http/Resources/EventDaysResource.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Http/Resources/EventDaysResource.php	(revision )
++++ src/backend/app/Http/Resources/EventDaysResource.php	(revision )
+@@ -0,0 +1,22 @@
++<?php
++
++namespace App\Http\Resources;
++
++use Illuminate\Http\Resources\Json\JsonResource;
++
++class EventDaysResource extends JsonResource
++{
++    /**
++     * Transform the resource into an array.
++     *
++     * @param  \Illuminate\Http\Request  $request
++     * @return array
++     */
++    public function toArray($request)
++    {
++        return [
++            'id' => $this->id,
++            'date' => $this->date,
++        ];
++    }
++}
+Index: src/backend/routes/api.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?php\n\n/*\n|--------------------------------------------------------------------------\n| API Routes\n|--------------------------------------------------------------------------\n|\n| Here is where you can register API routes for your application. These\n| routes are loaded by the RouteServiceProvider within a group which\n| is assigned the \"api\" middleware group. Enjoy building your API!\n|\n*/\n// Default API Homepage\nRoute::get('/', 'API\\HomeController');\n\n// Profile\nRoute::get('/profile', 'API\\ProfileController@index');\nRoute::put('/profile', 'API\\ProfileController@update');\n\n// user logout\nRoute::delete('oauth/token', 'API\\Auth\\TokenController@delete')->middleware('auth:api');\n\n// user signup\nRoute::post('register', 'API\\UserController@register');\n\n// activate via email confirmation\nRoute::post('activate', 'API\\UserController@activate');\n\n// Routes for Forget and Reset Password\nRoute::post('password/forgot', 'API\\Auth\\PasswordController@forgot');\nRoute::post('password/reset', 'API\\Auth\\PasswordController@reset');\n\n// users route\nRoute::prefix('users')\n    ->group(function () {\n        Route::get('/', 'API\\UserController@index');\n        Route::post('/', 'API\\UserController@create');\n        Route::get('{id}', 'API\\UserController@read');\n        Route::put('{id}', 'API\\UserController@update');\n        Route::delete('{id}', 'API\\UserController@delete');\n    });\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/routes/api.php	(date 1617274652000)
++++ src/backend/routes/api.php	(revision )
+@@ -29,7 +29,10 @@
+ // Routes for Forget and Reset Password
+ Route::post('password/forgot', 'API\Auth\PasswordController@forgot');
+ Route::post('password/reset', 'API\Auth\PasswordController@reset');
+-
++Route::group(['middleware' => ['auth:api']], function () {
++    Route::get('/events/', 'API\EventsController@index');
++    Route::post('/events/', 'API\EventsController@create');
++});
+ // users route
+ Route::prefix('users')
+     ->group(function () {
+Index: src/frontend/src/store/events/actionTypes.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/store/events/actionTypes.js	(revision )
++++ src/frontend/src/store/events/actionTypes.js	(revision )
+@@ -0,0 +1,3 @@
++export const CREATE_EVENT = 'CREATE_EVENT';
++export const SEARCH_EVENT = 'SEARCH_EVENT';
++export const SET_SEARCH_CRITERIA = 'SET_SEARCH_CRITERIA';
+Index: src/backend/app/Services/API/EventService.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Services/API/EventService.php	(revision )
++++ src/backend/app/Services/API/EventService.php	(revision )
+@@ -0,0 +1,88 @@
++<?php
++
++namespace App\Services\API;
++
++use App\Http\Resources\EventResource;
++use App\Models\Event;
++use App\Models\EventDays;
++use DB;
++use Mail;
++use Hash;
++use Exception;
++use App\Traits\Uploadable;
++use App\Http\Resources\UserResource;
++
++class EventService
++{
++    use Uploadable;
++
++    /**
++     * @var App\Models\Event
++     */
++    protected $event;
++
++    /**
++     * UserService constructor.
++     *
++     * @param Event $event
++     */
++    public function __construct(Event $event)
++    {
++        $this->event = $event;
++    }
++
++    /**
++     * List users by conditions
++     *
++     * @param array $conditions
++     * @return array $results
++     */
++    public function search(array $conditions)
++    {
++        // initialize query
++        $query = $this->event;
++
++        // if keyword is provided
++        if (array_key_exists('keyword', $conditions)) {
++            $query = $query->where('name', 'LIKE', "%{$conditions['keyword']}%");
++        }
++
++        // perform user search
++        $results = $query->orderBy('id', 'DESC')
++                        ->with('eventDays')
++                        ->get();
++
++
++        return $results;
++    }
++
++    /**
++     * Creates a new event in the database
++     * @param array $params
++     * @return App\Models\Event $event
++     * @throws Exception
++     */
++    public function create(array $params)
++    {
++        DB::beginTransaction();
++
++        try {
++            $event = Event::where('name', $params['name'])->first();
++            if (!isset($event)) {
++                /** @var Event $event */
++                $event = Event::create($params);
++            }
++            $params['event_id'] = $event->getAttribute('id');
++
++            EventDays::create($params);
++
++            DB::commit();
++        } catch (Exception $e) {
++            DB::rollback();
++
++            throw $e;
++        }
++
++        return $event;
++    }
++}
+Index: src/frontend/src/router/routes.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>export default [\n  {\n    path: '/',\n    component: 'views/dashboard',\n    auth: true,\n  },\n  {\n    path: '/users',\n    component: 'views/users',\n    auth: true,\n  },\n  {\n    path: '/sign-in',\n    component: 'views/sign-in',\n    layout: 'minimal',\n  },\n  {\n    path: '/sign-up',\n    component: 'views/sign-up',\n    layout: 'minimal',\n  },\n  {\n    path: '/forgot-password',\n    component: 'views/forgot-password',\n    layout: 'minimal',\n  },\n  {\n    path: '/password/reset',\n    component: 'views/reset-password',\n    layout: 'minimal',\n  },\n  {\n    path: '/activate',\n    component: 'views/activate',\n    layout: 'minimal',\n  },\n];\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/router/routes.js	(date 1617274652000)
++++ src/frontend/src/router/routes.js	(revision )
+@@ -10,6 +10,11 @@
+     auth: true,
+   },
+   {
++    path: '/events',
++    component: 'views/events',
++    auth: true,
++  },
++  {
+     path: '/sign-in',
+     component: 'views/sign-in',
+     layout: 'minimal',
+Index: src/backend/app/Models/Event.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Models/Event.php	(revision )
++++ src/backend/app/Models/Event.php	(revision )
+@@ -0,0 +1,40 @@
++<?php
++
++namespace App\Models;
++
++use Illuminate\Database\Eloquent\Model;
++
++class Event extends Model
++{
++    /**
++     * The attributes that are mass assignable.
++     *
++     * @var array
++     */
++    protected $fillable = ['name'];
++
++    /**
++     * Retrieve all EventDays under this status
++     *
++     * @return App\Models\EventDays[]
++     */
++    public function eventDays()
++    {
++        return $this->hasMany(EventDays::class);
++    }
++
++    /**
++     * Creates a scope to search all events by the provided keyword.
++     *
++     * @param Builder $query
++     * @param string $keyword
++     * @return Builder
++     */
++    public function scopeSearch($query, $keyword)
++    {
++        return $query = $query
++            ->where(function ($q) use ($keyword) {
++                $q->where('name', 'LIKE', "%{$keyword}%");
++            });
++    }
++}
+Index: src/frontend/src/store/events/actionCreators.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/store/events/actionCreators.js	(revision )
++++ src/frontend/src/store/events/actionCreators.js	(revision )
+@@ -0,0 +1,23 @@
++import * as types from './actionTypes';
++
++export function actionCreateEvent(userDetails) {
++  return {
++    type: types.CREATE_EVENT,
++    payload: userDetails,
++  };
++}
++
++export function actionSearchEvent(userList) {
++  return {
++    type: types.SEARCH_EVENT,
++    payload: userList
++  };
++}
++
++export function actionSetSearchCriteria(keyword, page, limit, sort, sortBy) {
++  return {
++    type: types.SET_SEARCH_CRITERIA,
++    payload: {keyword, page, limit, sort, sortBy},
++  };
++}
++
+Index: src/backend/app/Models/EventDays.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Models/EventDays.php	(revision )
++++ src/backend/app/Models/EventDays.php	(revision )
+@@ -0,0 +1,25 @@
++<?php
++
++namespace App\Models;
++
++use Illuminate\Database\Eloquent\Model;
++
++class EventDays extends Model
++{
++    /**
++     * The attributes that are mass assignable.
++     *
++     * @var array
++     */
++    protected $fillable = ['event_id', 'date'];
++
++    /**
++     * Retrieve Event under this status
++     *
++     * @return App\Models\Event[]
++     */
++    public function event()
++    {
++        return $this->belongsTo(Event::class);
++    }
++}
+Index: src/frontend/src/services/events.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/services/events.js	(revision )
++++ src/frontend/src/services/events.js	(revision )
+@@ -0,0 +1,45 @@
++import Http from 'utils/Http';
++import { showLoader, hideLoader } from "store/loader/actionCreators";
++import {
++  actionCreateEvent,
++  actionSearchEvent,
++  actionSetSearchCriteria,
++} from '../store/events/actionCreators';
++
++export function createEvent(eventDetails) {
++  return dispatch => {
++    dispatch(showLoader());
++
++    return Http.post('events', eventDetails)
++      .then(response => {
++        dispatch(actionCreateEvent(response.data));
++      })
++      .finally(() => {
++        dispatch(hideLoader());
++      });
++  };
++}
++
++export function searchEvent(keyword) {
++  return dispatch => {
++    dispatch(showLoader());
++
++    return Http.get('events', {params: {keyword}})
++      .then(response => {
++        dispatch(actionSearchEvent(response.data));
++      })
++      .catch(error => {
++        console.log(error);
++        // TODO Handle error throw a snackbar, alert, toast, or something
++      })
++      .finally(() => {
++        dispatch(hideLoader());
++      })
++  }
++}
++
++export function changeSearchCriteria(keyword, page, limit, sort, sortBy) {
++  return dispatch => {
++    dispatch(actionSetSearchCriteria(keyword, page, limit, sort, sortBy));
++  };
++}
+Index: src/backend/app/Http/Controllers/API/EventsController.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Http/Controllers/API/EventsController.php	(revision )
++++ src/backend/app/Http/Controllers/API/EventsController.php	(revision )
+@@ -0,0 +1,136 @@
++<?php
++
++namespace App\Http\Controllers\API;
++
++use App\Http\Controllers\Controller;
++use App\Http\Requests\API\Events\CreateEventRequest;
++use App\Http\Requests\API\Events\SearchEventRequest;
++use App\Http\Resources\EventResource;
++use App\Services\API\EventService;
++use Carbon\Carbon;
++use DateInterval;
++use DatePeriod;
++use DateTime;
++
++class EventsController extends Controller
++{
++    /** @var App\Services\API\EventService */
++    protected $eventService;
++
++    /**
++     * EventController constructor.
++     * @param EventService $eventService
++     */
++    public function __construct(EventService $eventService)
++    {
++        parent::__construct();
++
++        $this->eventService = $eventService;
++
++        // enable api middleware
++        $this->middleware(['auth:api']);
++    }
++
++    /**
++     * Retrieves the list of events.
++     *
++     * @param SearchEventRequest $request
++     * @return Response
++     */
++    public function index(SearchEventRequest $request)
++    {
++        try {
++            $formData = [
++                'keyword' => $request->getKeyword(),
++            ];
++
++            $results = $this->eventService->search($formData);
++
++            $this->response['data'] = EventResource::collection($results);
++        } catch (Exception $e) { // @codeCoverageIgnoreStart
++            $this->response = [
++                'error' => $e->getMessage(),
++                'code' => 500,
++            ];
++        } // @codeCoverageIgnoreEnd
++
++        return response()->json($this->response, $this->response['code']);
++    }
++
++    /**
++     * Creates new event. Creator must be authenticated.
++     *
++     * @param CreateEventRequest $request
++     * @return Response
++     */
++    public function create(CreateEventRequest $request)
++    {
++        try {
++            $begin = new DateTime($request->getStartDate());
++            $end = new DateTime($request->getEndDate());
++            $begin = $begin->modify( '+1 day' );
++
++            $period = new DatePeriod($end, new DateInterval('P1D'), $begin);
++            foreach ($period as $dt) {
++                if (in_array("1", $request->getDays()) && $dt->format('l') == 'Monday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                } elseif (in_array("2", $request->getDays()) && $dt->format('l') == 'Tuesday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                } elseif (in_array("3", $request->getDays()) && $dt->format('l') == 'Wednesday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                } elseif (in_array("4", $request->getDays()) && $dt->format('l') == 'Thursday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                } elseif (in_array("5", $request->getDays()) && $dt->format('l') == 'Friday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                } elseif (in_array("6", $request->getDays()) && $dt->format('l') == 'Saturday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                } elseif (in_array("7", $request->getDays()) && $dt->format('l') == 'Sunday') {
++                    $formData = [
++                        'name' => $request->getName(),
++                        'date' => $dt,
++                    ];
++                    $event = $this->eventService->create($formData);
++                    $this->response['data'] = new EventResource($event);
++                }
++
++            }
++        } catch (Exception $e) { // @codeCoverageIgnoreStart
++            $this->response = [
++                'error' => $e->getMessage(),
++                'code' => 500,
++            ];
++        } // @codeCoverageIgnoreEnd
++
++        return response()->json($this->response, $this->response['code']);
++    }
++}
+Index: src/backend/database/migrations/2021_03_31_031806_create_events_table.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/database/migrations/2021_03_31_031806_create_events_table.php	(revision )
++++ src/backend/database/migrations/2021_03_31_031806_create_events_table.php	(revision )
+@@ -0,0 +1,32 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++class CreateEventsTable extends Migration
++{
++    /**
++     * Run the migrations.
++     *
++     * @return void
++     */
++    public function up()
++    {
++        Schema::create('events', function (Blueprint $table) {
++            $table->bigIncrements('id');
++            $table->string('name');
++            $table->timestamps();
++        });
++    }
++
++    /**
++     * Reverse the migrations.
++     *
++     * @return void
++     */
++    public function down()
++    {
++        Schema::dropIfExists('events');
++    }
++}
+Index: src/backend/app/Http/Requests/API/Events/CreateEventRequest.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Http/Requests/API/Events/CreateEventRequest.php	(revision )
++++ src/backend/app/Http/Requests/API/Events/CreateEventRequest.php	(revision )
+@@ -0,0 +1,44 @@
++<?php
++
++namespace App\Http\Requests\API\Events;
++
++use Illuminate\Foundation\Http\FormRequest;
++
++class CreateEventRequest extends FormRequest
++{
++    /**
++     * Get the validation rules that apply to the request.
++     *
++     * @return array
++     */
++    public function rules()
++    {
++        return [
++            'name' => 'required|unique:events,name',
++            'start_date' => 'required|date',
++            'end_date' => 'required|date|after_or_equal:start_date',
++            'days' => 'nullable|array|min:1',
++            'days.*' => 'nullable',
++        ];
++    }
++
++    public function getName()
++    {
++        return $this->input('name', null);
++    }
++
++    public function getStartDate()
++    {
++        return $this->input('end_date', null);
++    }
++
++    public function getEndDate()
++    {
++        return $this->input('start_date', null);
++    }
++
++    public function getDays()
++    {
++        return $this->input('days.*', null);
++    }
++}
+Index: src/frontend/src/layouts/main/components/Sidebar/Sidebar.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import React from 'react';\nimport clsx from 'clsx';\nimport PropTypes from 'prop-types';\nimport { makeStyles } from '@material-ui/styles';\nimport { Divider, Drawer } from '@material-ui/core';\nimport DashboardIcon from '@material-ui/icons/Dashboard';\nimport PeopleIcon from '@material-ui/icons/People';\nimport ShoppingBasketIcon from '@material-ui/icons/ShoppingBasket';\nimport TextFieldsIcon from '@material-ui/icons/TextFields';\nimport ImageIcon from '@material-ui/icons/Image';\nimport AccountBoxIcon from '@material-ui/icons/AccountBox';\nimport SettingsIcon from '@material-ui/icons/Settings';\nimport LockOpenIcon from '@material-ui/icons/LockOpen';\n\nimport { Profile, SidebarNav } from './components';\n\nconst useStyles = makeStyles(theme => ({\n  drawer: {\n    width: 240,\n    [theme.breakpoints.up('lg')]: {\n      marginTop: 64,\n      height: 'calc(100% - 64px)',\n    },\n  },\n  root: {\n    backgroundColor: theme.palette.white,\n    display: 'flex',\n    flexDirection: 'column',\n    height: '100%',\n    padding: theme.spacing(2),\n  },\n  divider: {\n    margin: theme.spacing(2, 0),\n  },\n  nav: {\n    marginBottom: theme.spacing(2),\n  },\n}));\n\nconst Sidebar = props => {\n  const { open, variant, onClose, className, ...rest } = props;\n\n  const classes = useStyles();\n\n  const pages = [\n    {\n      title: 'Dashboard',\n      href: '/dashboard',\n      icon: <DashboardIcon />,\n    },\n    {\n      title: 'Users',\n      href: '/users',\n      icon: <PeopleIcon />,\n    },\n    {\n      title: 'Products',\n      href: '/products',\n      icon: <ShoppingBasketIcon />,\n    },\n    {\n      title: 'Authentication',\n      href: '/sign-in',\n      icon: <LockOpenIcon />,\n    },\n    {\n      title: 'Typography',\n      href: '/typography',\n      icon: <TextFieldsIcon />,\n    },\n    {\n      title: 'Icons',\n      href: '/icons',\n      icon: <ImageIcon />,\n    },\n    {\n      title: 'Account',\n      href: '/account',\n      icon: <AccountBoxIcon />,\n    },\n    {\n      title: 'Settings',\n      href: '/settings',\n      icon: <SettingsIcon />,\n    },\n  ];\n\n  return (\n    <Drawer\n      anchor=\"left\"\n      classes={{ paper: classes.drawer }}\n      onClose={onClose}\n      open={open}\n      variant={variant}\n    >\n      <div {...rest} className={clsx(classes.root, className)}>\n        <Profile />\n        <Divider className={classes.divider} />\n        <SidebarNav className={classes.nav} pages={pages} />\n      </div>\n    </Drawer>\n  );\n};\n\nSidebar.propTypes = {\n  className: PropTypes.string,\n  onClose: PropTypes.func,\n  open: PropTypes.bool.isRequired,\n  variant: PropTypes.string.isRequired,\n};\n\nexport default Sidebar;\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/layouts/main/components/Sidebar/Sidebar.js	(date 1617274652000)
++++ src/frontend/src/layouts/main/components/Sidebar/Sidebar.js	(revision )
+@@ -5,12 +5,7 @@
+ import { Divider, Drawer } from '@material-ui/core';
+ import DashboardIcon from '@material-ui/icons/Dashboard';
+ import PeopleIcon from '@material-ui/icons/People';
+-import ShoppingBasketIcon from '@material-ui/icons/ShoppingBasket';
+-import TextFieldsIcon from '@material-ui/icons/TextFields';
+-import ImageIcon from '@material-ui/icons/Image';
+-import AccountBoxIcon from '@material-ui/icons/AccountBox';
+-import SettingsIcon from '@material-ui/icons/Settings';
+-import LockOpenIcon from '@material-ui/icons/LockOpen';
++import EventIcon from '@material-ui/icons/Event';
+ 
+ import { Profile, SidebarNav } from './components';
+ 
+@@ -54,34 +49,9 @@
+       icon: <PeopleIcon />,
+     },
+     {
+-      title: 'Products',
+-      href: '/products',
+-      icon: <ShoppingBasketIcon />,
+-    },
+-    {
+-      title: 'Authentication',
+-      href: '/sign-in',
+-      icon: <LockOpenIcon />,
+-    },
+-    {
+-      title: 'Typography',
+-      href: '/typography',
+-      icon: <TextFieldsIcon />,
+-    },
+-    {
+-      title: 'Icons',
+-      href: '/icons',
+-      icon: <ImageIcon />,
+-    },
+-    {
+-      title: 'Account',
+-      href: '/account',
+-      icon: <AccountBoxIcon />,
+-    },
+-    {
+-      title: 'Settings',
+-      href: '/settings',
+-      icon: <SettingsIcon />,
++      title: 'Events',
++      href: '/events',
++      icon: <EventIcon />,
+     },
+   ];
+ 
+Index: src/backend/app/Http/Requests/API/Events/SearchEventRequest.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Http/Requests/API/Events/SearchEventRequest.php	(revision )
++++ src/backend/app/Http/Requests/API/Events/SearchEventRequest.php	(revision )
+@@ -0,0 +1,25 @@
++<?php
++
++namespace App\Http\Requests\API\Events;
++
++use Illuminate\Foundation\Http\FormRequest;
++
++class SearchEventRequest extends FormRequest
++{
++    /**
++     * Get the validation rules that apply to the request.
++     *
++     * @return array
++     */
++    public function rules()
++    {
++        return [
++            'keyword' => 'nullable',
++        ];
++    }
++
++    public function getKeyword()
++    {
++        return $this->input('keyword', '');
++    }
++}
+Index: src/backend/app/Http/Resources/EventResource.php
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/backend/app/Http/Resources/EventResource.php	(revision )
++++ src/backend/app/Http/Resources/EventResource.php	(revision )
+@@ -0,0 +1,27 @@
++<?php
++
++namespace App\Http\Resources;
++
++use App\Models\Event;
++use Illuminate\Http\Resources\Json\JsonResource;
++
++class EventResource extends JsonResource
++{
++    /**
++     * Transform the resource into an array.
++     *
++     * @param  \Illuminate\Http\Request  $request
++     * @return array
++     */
++    public function toArray($request)
++    {
++        /** @var Event $event */
++        $event = $this->resource;
++
++        return [
++            'id' => $event->getAttribute('id'),
++            'name' => $event->getAttribute('name'),
++            'dates' => EventDaysResource::collection($event->eventDays),
++        ];
++    }
++}
+Index: src/frontend/src/store/events/reducer.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/store/events/reducer.js	(revision )
++++ src/frontend/src/store/events/reducer.js	(revision )
+@@ -0,0 +1,52 @@
++import * as types from './actionTypes';
++
++const initialState = {
++  list: [],
++  search: {
++    keyword: '',
++  },
++};
++
++function reducer(state = initialState, action) {
++  const { type, payload } = action;
++
++  switch (type) {
++    case types.CREATE_EVENT:
++      return state;
++    case types.SEARCH_EVENT:
++      return {
++        ...state,
++        list: payload.data,
++        search: {
++          ...state.search,
++        },
++      };
++    case types.SET_SEARCH_CRITERIA:
++      return {
++        ...state,
++        search: {
++          ...state.search,
++          ...payload,
++        },
++      };
++    default:
++      return state;
++  }
++}
++
++function formulateCurrentPage(currentPage, totalCount, pageSize) {
++  let totalPages = Math.ceil(totalCount / pageSize);
++  let newCurrentPage = currentPage;
++
++  if (totalPages === 0) {
++    // There are no entries, set current page to 1.
++    newCurrentPage = 1;
++  } else if (totalPages < currentPage) {
++    // The current page is out of bounds, return last page instead
++    newCurrentPage = totalPages;
++  }
++
++  return newCurrentPage;
++}
++
++export default reducer;
+Index: src/frontend/src/store/reducers.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import { combineReducers } from 'redux';\nimport auth from './auth/reducer';\nimport loader from './loader/reducer';\nimport notification from './notification/reducer';\nimport users from './users/reducer';\n\nconst reducers = combineReducers({\n  auth,\n  loader,\n  notification,\n  users,\n});\n\nexport default reducers;\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/store/reducers.js	(date 1617274652000)
++++ src/frontend/src/store/reducers.js	(revision )
+@@ -3,12 +3,14 @@
+ import loader from './loader/reducer';
+ import notification from './notification/reducer';
+ import users from './users/reducer';
++import events from './events/reducer';
+ 
+ const reducers = combineReducers({
+   auth,
+   loader,
+   notification,
+   users,
++  events,
+ });
+ 
+ export default reducers;
+Index: src/frontend/src/views/events/Event.js
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- src/frontend/src/views/events/Event.js	(revision )
++++ src/frontend/src/views/events/Event.js	(revision )
+@@ -0,0 +1,382 @@
++import React, { useEffect, useState } from 'react';
++import { Page } from 'components';
++import {
++  Button,
++  FormControl,
++  Grid,
++  InputLabel,
++  MenuItem,
++  Paper,
++  Select,
++  Table,
++  TableBody,
++  TableCell,
++  TableContainer,
++  TableFooter,
++  TableHead,
++  TablePagination,
++  TableRow,
++  TextField,
++  Typography,
++  List,
++  ListItem,
++  ListItemIcon,
++  ListItemText,
++  FormGroup,
++  FormControlLabel,
++  Checkbox,
++} from '@material-ui/core';
++import FolderIcon from '@material-ui/icons/Event';
++import { useDispatch, useSelector } from 'react-redux';
++import { useHistory } from 'react-router-dom';
++import { makeStyles } from '@material-ui/core/styles';
++import { searchEvent, createEvent, changeSearchCriteria } from "../../services/events";
++import { useFormHandler } from "../../utils/hooks";
++import reeValidate from 'ree-validate';
++import { Calendar, momentLocalizer } from 'react-big-calendar'
++import 'react-big-calendar/lib/css/react-big-calendar.css';
++import moment from 'moment';
++import _ from 'lodash';
++
++const useStyles = makeStyles(theme => ({
++  paper: {
++    background: "#F0F0F0",
++    padding: theme.spacing(6),
++    width: '100%',
++  },
++  divider: {
++    marginTop: '15px',
++    marginBottom: '15px'
++  },
++  calendar: {
++    paddingLeft: '55px',
++  }
++}));
++
++const dictionary = {
++  en: {
++    attributes: {
++      name: 'name',
++      start_date: 'start date',
++      end_date: 'end date',
++    }
++  },
++};
++
++const validator = new reeValidate({
++  name: 'required',
++  start_date: 'required',
++  end_date: 'required',
++});
++
++function Event() {
++  const classes = useStyles();
++  const dispatch = useDispatch();
++  const [keyword, setKeyword] = useState('');
++  const [loading, setLoading] = useState(false);
++  const [addEventFlag, setAddEventFlag] = useState(false);
++  const list = useSelector(state => state.events.list);
++
++  const [formState, handleChange, submitForm, hasError, clearErrors] = useFormHandler(validator);
++  const [initFormState, setInitFormState] = useState(false);
++  validator.localize(dictionary);
++  const localizer = momentLocalizer(moment)
++
++  const [startDate, setStartDate] = useState(moment().clone().startOf('month').format('YYYY-MM-DD'));
++  const [endDate, setEndDate] = useState(moment().clone().endOf('month').format('YYYY-MM-DD'));
++  const [optionDays, setOptionDays] = React.useState({
++    monday: true,
++    tuesday: true,
++    wednesday: true,
++    thursday: true,
++    friday: true,
++    saturday: true,
++    sunday: true,
++  });
++  const [calendarEvents, setCalendarEvents] = useState([]);
++  const [month, setMonth] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
++
++  useEffect(() => {
++    dispatch(searchEvent(keyword));
++    setAddEventFlag(false);
++  }, [keyword, addEventFlag]);
++
++  useEffect(() => {
++    let temp = [];
++    list.forEach((event) => {
++      event.dates.forEach((date) => {
++        temp.push({
++          title: event.name,
++          allDay: true,
++          start: new Date(date.date),
++          end: new Date(date.date)
++        });
++      })
++    });
++    setCalendarEvents(temp);
++  }, [list]);
++
++  useEffect(() => {
++    if (!initFormState) {
++      formState.values = {
++        name: '',
++        start_date: startDate,
++        end_date: endDate,
++        days: []
++      };
++      setInitFormState(true);
++      clearErrors();
++    }
++  }, [initFormState]);
++
++  const onSubmit = () => {
++    convertDays();
++    submitForm(() => {
++      setLoading(true);
++      dispatch(createEvent(formState.values))
++        .then(() => {
++          setAddEventFlag(true);
++        })
++        .catch(e => {
++          const errors = e.response.data.error;
++          console.log(e.response);
++          Object.keys(errors).forEach(value => {
++            validator.errors.add(value, errors[value][0]);
++          });
++        }).finally(() => {
++        setLoading(false);
++      });
++    });
++  };
++
++  const handleDateChange = (event) => {
++    const type = event.target.name;
++    if (type === 'start_date') {
++      formState.values.start_date = event.target.value;
++      setStartDate(event.target.value);
++    }
++    if (type === 'end_date') {
++      formState.values.end_date = event.target.value;
++      setEndDate(event.target.value);
++    }
++  };
++
++  const handleDaysChange = (event) => {
++    setOptionDays({ ...optionDays, [event.target.name]: event.target.checked });
++  };
++
++  const convertDays = () => {
++    let tempDays = []
++    if (optionDays.monday) {
++      tempDays.push(1);
++    }
++    if (optionDays.tuesday) {
++      tempDays.push(2);
++    }
++    if (optionDays.wednesday) {
++      tempDays.push(3);
++    }
++    if (optionDays.thursday) {
++      tempDays.push(4);
++    }
++    if (optionDays.friday) {
++      tempDays.push(5);
++    }
++    if (optionDays.saturday) {
++      tempDays.push(6);
++    }
++    if (optionDays.sunday) {
++      tempDays.push(7);
++    }
++    formState.values.days = tempDays;
++    return tempDays;
++  }
++
++  return (
++    <Page title="Events">
++      <Grid container direction="column" alignItems="center" justify="space-between" spacing={2}>
++        <Grid container item direction="column" alignItems="flex-start" xs={12} sm={12} md={10}
++              lg={10}>
++          <Typography variant="h2">
++            Events
++          </Typography>
++        </Grid>
++        <Grid container item xs={12} sm={12} md={10} lg={10} xl={10}>
++          <Paper className={classes.paper}>
++            <Grid container item direction="row" md={12}>
++              <Grid item md={4}>
++                <Grid container item direction="row" md={12} spacing={3}>
++                  <Grid item md={12}>
++                    <TextField fullWidth variant="outlined" label="Event Name" id="name" name="name"
++                               onChange={handleChange}
++                               error={hasError('name')}/>
++                  </Grid>
++                </Grid>
++                <Grid container item direction="row" md={12} spacing={3}>
++                  <Grid item md={6}>
++                    <TextField fullWidth variant="outlined" id="date" type="date"
++                               defaultValue={startDate}
++                               name="start_date"
++                               className={classes.textField} label='Start Date'
++                               onChange={handleDateChange}
++                               InputLabelProps={{
++                                 shrink: true,
++                               }}
++                    />
++                  </Grid>
++                  <Grid item md={6}>
++                    <TextField fullWidth variant="outlined" id="date" type="date"
++                               defaultValue={endDate}
++                               name="end_date"
++                               className={classes.textField} label='End Date'
++                               onChange={handleDateChange}
++                               InputLabelProps={{
++                                 shrink: true,
++                               }}
++                    />
++                  </Grid>
++                </Grid>
++                <Grid container item direction="row" md={12} spacing={3}>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.monday}
++                          onChange={handleDaysChange}
++                          name="monday"
++                          color="primary"
++                        />
++                      }
++                      label="Monday"
++                    />
++                  </Grid>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.tuesday}
++                          onChange={handleDaysChange}
++                          name="tuesday"
++                          color="primary"
++                        />
++                      }
++                      label="Tuesday"
++                    />
++                  </Grid>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.wednesday}
++                          onChange={handleDaysChange}
++                          name="wednesday"
++                          color="primary"
++                        />
++                      }
++                      label="Wednesday"
++                    />
++                  </Grid>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.thursday}
++                          onChange={handleDaysChange}
++                          name="thursday"
++                          color="primary"
++                        />
++                      }
++                      label="Thursday"
++                    />
++                  </Grid>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.friday}
++                          onChange={handleDaysChange}
++                          name="friday"
++                          color="primary"
++                        />
++                      }
++                      label="Friday"
++                    />
++                  </Grid>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.saturday}
++                          onChange={handleDaysChange}
++                          name="saturday"
++                          color="primary"
++                        />
++                      }
++                      label="Saturday"
++                    />
++                  </Grid>
++                  <Grid item md={3}>
++                    <FormControlLabel
++                      control={
++                        <Checkbox
++                          checked={optionDays.sunday}
++                          onChange={handleDaysChange}
++                          name="sunday"
++                          color="primary"
++                        />
++                      }
++                      label="Sunday"
++                    />
++                  </Grid>
++                </Grid>
++                <Grid container item direction="row" justify="flex-end" alignItems="flex-end" md={12} spacing={3}>
++                  <Grid item md={4}>
++                    <Button variant="contained" color="primary" fullWidth={true} onClick={onSubmit}>
++                      Save
++                    </Button>
++                  </Grid>
++                </Grid>
++                <hr className={classes.divider}/>
++                <Grid container item direction="row" justify="flex-start" alignItems="flex-start" md={12} spacing={3}>
++                  <Grid item md={12}>
++                    <Typography variant="h4">
++                      List of Events:
++                    </Typography>
++                  </Grid>
++                  <Grid item md={6}>
++                    <List>
++                      {list.map((event, i) =>
++                        <ListItem key={i}>
++                          <ListItemIcon>
++                            <FolderIcon />
++                          </ListItemIcon>
++                          <ListItemText
++                            primary={event.name}
++                          />
++                        </ListItem>
++                      )}
++                    </List>
++                  </Grid>
++
++                </Grid>
++              </Grid>
++              <Grid item md={8}>
++                <Grid container item md={12} className={classes.calendar}>
++                  <Calendar
++                    localizer={localizer}
++                    events={calendarEvents}
++                    startAccessor="start"
++                    endAccessor="end"
++                    style={{ height: 600, width: 800 }}
++                  />
++                </Grid>
++              </Grid>
++            </Grid>
++          </Paper>
++        </Grid>
++      </Grid>
++    </Page>
++  );
++}
++
++export default Event;
